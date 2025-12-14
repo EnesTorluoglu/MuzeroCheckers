@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MuZero Checkers</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 20px;
+            background-color: #f0f0f0;
+        }
+        h1 {
+            color: #333;
+        }
+        .board-container {
+            display: grid;
+            /* Satır ve sütun sayıları dinamik olarak ayarlanabilir, ancak CSS'de sabit bırakmak daha kolay olabilir */
+            /* JavaScript ile dinamik olarak ayarlanacak */
+            border: 2px solid #333;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .square {
+            width: 60px; /* Kare boyutu */
+            height: 60px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: default; /* Varsayılan olarak tıklanmaz */
+        }
+        .dark-square {
+            background-color: #769656; /* Koyu kare rengi (örnek) */
+        }
+        .light-square {
+            background-color: #eeeed2; /* Açık kare rengi (örnek) */
+        }
+        .piece-p1 {
+            width: 80%;
+            height: 80%;
+            background-color: white;
+            border-radius: 50%;
+            border: 2px solid #555;
+            box-sizing: border-box;
+        }
+        .piece-p2 {
+            width: 80%;
+            height: 80%;
+            background-color: black;
+            border-radius: 50%;
+            border: 2px solid #ccc;
+            box-sizing: border-box;
+        }
+        .playable-square {
+            cursor: pointer;
+            background-color: #bacaa3 !important; /* Tıklanabilir kare vurgusu */
+        }
+        .selected-square {
+            outline: 3px solid #ffcc00; /* Seçili kare vurgusu */
+            outline-offset: -3px;
+        }
+        .target-square {
+            background-color: #add8e6 !important; /* Hedef kare vurgusu */
+            cursor: pointer;
+        }
+        .controls, .status, .last-move {
+            margin-bottom: 15px;
+            padding: 10px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .controls button {
+            padding: 10px 15px;
+            font-size: 16px;
+            margin: 0 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 5px;
+            background-color: #5cb85c;
+            color: white;
+            transition: background-color 0.3s ease;
+        }
+        .controls button:hover {
+            background-color: #4cae4c;
+        }
+        .status p, .last-move p {
+            margin: 5px 0;
+            font-size: 1.1em;
+        }
+        .game-over-message {
+            color: red;
+            font-weight: bold;
+            font-size: 1.5em;
+        }
+        .error-message {
+            color: orange;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <h1>MuZero Checkers</h1>
+
+    <div class="status">
+        <p>Sıradaki Oyuncu: <strong id="currentPlayer">{{ current_player }}</strong></p>
+        <p id="humanPlayerInfo">Siz: {{ 'Beyaz (P1)' if human_player_id == board_constants.P1_PIECE else 'Siyah (P2)' }}</p>
+        <p id="turnInfo">{{ 'Sıra Sizde' if is_human_turn else 'Sıra MuZero Agent\'ta' }}</p>
+        <p id="gameStatusMessage" 
+           class="{{ 'game-over-message' if game_over_message and ('kazandınız' in game_over_message or 'MuZero kazandı' in game_over_message or 'berabere' in game_over_message) else 'error-message' if game_over_message else '' }}">
+           {{ game_over_message or '' }}
+        </p>
+    </div>
+
+    <div class="board-container" id="boardContainer">
+        {# Tahta JavaScript ile dinamik olarak oluşturulacak #}
+    </div>
+
+    <div class="last-move" id="lastMoveInfoContainer" style="display: none;">
+        <p>Son Hamle: <span id="lastMovePlayer"></span> - <span id="lastMoveType"></span></p>
+        <p><span id="lastMoveFrom"></span> &rarr; <span id="lastMoveTo"></span></p>
+        <p id="lastMoveCapturedWrapper">Yenen Taş: <span id="lastMoveCapturedCount"></span></p>
+    </div>
+
+    <div class="controls">
+        <button id="startAsWhite">Beyaz Olarak Başla</button>
+    </div>
+
+    <script>
+        const P1_PIECE_JS = {{ board_constants.P1_PIECE|tojson }};
+        const P2_PIECE_JS = {{ board_constants.P2_PIECE|tojson }};
+        const EMPTY_JS = {{ board_constants.EMPTY|tojson }};
+        const BOARD_ROWS_JS = {{ rows|tojson }};
+        const BOARD_COLS_JS = {{ cols|tojson }};
+
+        let currentBoardState = {{ board|tojson }};
+        let humanPlayerId = {{ human_player_id|tojson }};
+        let isHumanTurnGlobal = {{ is_human_turn|tojson }};
+        
+        // Yeni durum değişkenleri
+        let selectedPieceOriginalCoords = null; // {r, c} formatında, hamle dizisinin başladığı taş
+        let potentialMovesFromOrigCoords = [];  // Seçili orijinal taştan yapılabilecek TÜM hamle objeleri
+        let activeMultiJump = null;             // Aktif zincirleme yemenin detaylarını tutar
+                                                // { move: {...}, currentIndexInPath: X, boardStateSnapshot: [...] }
+
+        const boardContainer = document.getElementById('boardContainer');
+        const currentPlayerDisplay = document.getElementById('currentPlayer');
+        const humanPlayerInfoDisplay = document.getElementById('humanPlayerInfo');
+        const turnInfoDisplay = document.getElementById('turnInfo');
+        const gameStatusMessageDisplay = document.getElementById('gameStatusMessage');
+        
+        const lastMoveContainer = document.getElementById('lastMoveInfoContainer');
+        const lastMovePlayerDisplay = document.getElementById('lastMovePlayer');
+        const lastMoveTypeDisplay = document.getElementById('lastMoveType');
+        const lastMoveFromDisplay = document.getElementById('lastMoveFrom');
+        const lastMoveToDisplay = document.getElementById('lastMoveTo');
+        const lastMoveCapturedWrapper = document.getElementById('lastMoveCapturedWrapper');
+        const lastMoveCapturedCountDisplay = document.getElementById('lastMoveCapturedCount');
+
+        function createBoardSnapshotForMultiJump(baseBoard, fullMove, currentPathIndex) {
+            // baseBoard: sunucudan gelen son gerçek tahta durumu (currentBoardState)
+            // fullMove: zincirleme yemenin tamamını içeren orijinal hamle objesi
+            // currentPathIndex: oyuncunun fullMove.path_coords içinde şu anda bulunduğu indeks (yani bu adıma yeni geldi)
+            let snapshot = JSON.parse(JSON.stringify(baseBoard)); // Derin kopya
+            const pieceToMove = baseBoard[fullMove.start_pos[0]][fullMove.start_pos[1]];
+
+            // Önceki adımlardaki tüm taş hareketlerini ve taş yemelerini uygula
+            for (let i = 0; i < currentPathIndex; i++) {
+                const prevSq = fullMove.path_coords[i];
+                const nextSq = fullMove.path_coords[i+1];
+                const capturedSq = fullMove.captured_pieces_coords[i];
+
+                snapshot[prevSq[0]][prevSq[1]] = EMPTY_JS;         // Önceki kareyi boşalt
+                snapshot[capturedSq[0]][capturedSq[1]] = EMPTY_JS; // Yenen taşı kaldır
+                snapshot[nextSq[0]][nextSq[1]] = pieceToMove;      // Taşı yeni yerine koy
+            }
+            return snapshot;
+        }
+
+        function drawBoard() {
+            boardContainer.innerHTML = '';
+            boardContainer.style.gridTemplateColumns = `repeat(${BOARD_COLS_JS}, 1fr)`;
+
+            let boardToDraw = currentBoardState; // Varsayılan olarak sunucudan gelen son durumu çiz
+            if (activeMultiJump && activeMultiJump.boardStateSnapshot) {
+                boardToDraw = activeMultiJump.boardStateSnapshot; // Zincirleme yeme sırasında geçici durumu çiz
+            }
+
+            for (let r = 0; r < BOARD_ROWS_JS; r++) {
+                for (let c = 0; c < BOARD_COLS_JS; c++) {
+                    const square = document.createElement('div');
+                    square.classList.add('square');
+                    square.dataset.r = r; // data-r ve data-c olarak kalsın, handleSquareClick'te de böyle kullanılıyor
+                    square.dataset.c = c;
+                    if ((r + c) % 2 === 0) {
+                        square.classList.add('dark-square');
+                    } else {
+                        square.classList.add('light-square');
+                    }
+
+                    const pieceVal = boardToDraw[r][c];
+                    if (pieceVal === P1_PIECE_JS) {
+                        const pieceDiv = document.createElement('div');
+                        pieceDiv.classList.add('piece-p1');
+                        square.appendChild(pieceDiv);
+                    } else if (pieceVal === P2_PIECE_JS) {
+                        const pieceDiv = document.createElement('div');
+                        pieceDiv.classList.add('piece-p2');
+                        square.appendChild(pieceDiv);
+                    }
+                    boardContainer.appendChild(square);
+                }
+            }
+
+            // Vurgulamalar
+            if (activeMultiJump) {
+                // Zincirleme yeme sırasında: mevcut konumu ve bir sonraki hedefi vurgula
+                const pieceCurrentPos = activeMultiJump.move.path_coords[activeMultiJump.currentIndexInPath];
+                const currentDomSquare = boardContainer.querySelector(`[data-r='${pieceCurrentPos[0]}'][data-c='${pieceCurrentPos[1]}']`);
+                if (currentDomSquare) currentDomSquare.classList.add('selected-square'); // Ya da 'in-motion-piece' gibi farklı bir stil
+
+                if (activeMultiJump.currentIndexInPath < activeMultiJump.move.path_coords.length - 1) {
+                    const nextHopPos = activeMultiJump.move.path_coords[activeMultiJump.currentIndexInPath + 1];
+                    const targetDomSquare = boardContainer.querySelector(`[data-r='${nextHopPos[0]}'][data-c='${nextHopPos[1]}']`);
+                    if (targetDomSquare) targetDomSquare.classList.add('target-square');
+                }
+            } else if (selectedPieceOriginalCoords) {
+                // Normal taş seçimi sırasında: seçili taşı ve olası ilk adımları vurgula
+                const selectedDomSquare = boardContainer.querySelector(`[data-r='${selectedPieceOriginalCoords.r}'][data-c='${selectedPieceOriginalCoords.c}']`);
+                if (selectedDomSquare) selectedDomSquare.classList.add('selected-square');
+
+                potentialMovesFromOrigCoords.forEach(move => {
+                    if (move.path_coords && move.path_coords.length > 1) {
+                        const firstHopPos = move.path_coords[1]; // Her hamlenin ilk adımını hedef olarak göster
+                        const targetDomSquare = boardContainer.querySelector(`[data-r='${firstHopPos[0]}'][data-c='${firstHopPos[1]}']`);
+                        if (targetDomSquare) targetDomSquare.classList.add('target-square');
+                    } else if (move.type === 'simple') { // Basit hamleler için path_coords olmayabilir, end_pos kullanılır
+                         const targetDomSquare = boardContainer.querySelector(`[data-r='${move.end_pos[0]}'][data-c='${move.end_pos[1]}']`);
+                         if (targetDomSquare) targetDomSquare.classList.add('target-square');
+                    }
+                });
+            }
+        }
+
+        boardContainer.addEventListener('click', handleSquareClick);
+
+        function resetSelectionStates() {
+            selectedPieceOriginalCoords = null;
+            potentialMovesFromOrigCoords = [];
+            activeMultiJump = null;
+            // gameStatusMessageDisplay.textContent = ''; // Durum mesajını burada temizleme, oyun sonu mesajları kalmalı
+            // drawBoard(); // Genellikle bu fonksiyonu çağıran yer drawBoard'u zaten çağırır.
+        }
+
+        async function handleSquareClick(event) {
+            if (!isHumanTurnGlobal || (gameStatusMessageDisplay.textContent && gameStatusMessageDisplay.textContent.includes("kazand"))) return;
+
+            const clickedSquareElement = event.target.closest('.square');
+            if (!clickedSquareElement) return;
+
+            const r_clk = parseInt(clickedSquareElement.dataset.r);
+            const c_clk = parseInt(clickedSquareElement.dataset.c);
+
+            console.log(`Tıklanan kare: (${r_clk}, ${c_clk})`);
+
+            if (activeMultiJump) {
+                console.log("Aktif zincirleme yeme durumu:", JSON.stringify(activeMultiJump));
+                const expectedNextPos = activeMultiJump.move.path_coords[activeMultiJump.currentIndexInPath + 1];
+
+                if (r_clk === expectedNextPos[0] && c_clk === expectedNextPos[1]) {
+                    console.log("Zincirleme yemenin bir sonraki doğru adımına tıklandı.");
+                    activeMultiJump.currentIndexInPath++;
+                    
+                    // Snapshot'ı güncelle (bir sonraki adım için)
+                    // ÖNEMLİ: boardStateSnapshot, HER ZAMAN sunucudan gelen currentBoardState'ten BAŞLAYARAK,
+                    // o ana kadarki TÜM atlamaları uygulayarak oluşturulmalı.
+                    activeMultiJump.boardStateSnapshot = createBoardSnapshotForMultiJump(
+                        currentBoardState, // Temel olarak her zaman sunucunun son gerçek tahtasını kullan
+                        activeMultiJump.move, 
+                        activeMultiJump.currentIndexInPath
+                    );
+                    console.log("Yeni boardStateSnapshot oluşturuldu.");
+
+                    if (activeMultiJump.currentIndexInPath === activeMultiJump.move.path_coords.length - 1) {
+                        // Zincirleme yemenin sonuna ulaşıldı
+                        console.log("Zincirleme yeme tamamlandı. Sunucuya gönderiliyor:", JSON.stringify(activeMultiJump.move));
+                        await makeHumanMove(activeMultiJump.move); // Tüm hamleyi sunucuya gönder
+                        resetSelectionStates(); // Her şey sıfırlanacak ve sunucudan gelen yanıtla güncellenecek
+                        // makeHumanMove içindeki updateGameDisplay ve drawBoard zaten çağrılacak.
+                    } else {
+                        // Zincirleme yemede daha fazla adım var
+                        console.log("Zincirleme yeme devam ediyor. Sonraki adım için tahta çiziliyor.");
+                        drawBoard(); // Bir sonraki hedefi göstermek için tahtayı yeniden çiz
+                    }
+                } else {
+                    console.log("Zincirleme yeme sırasında geçersiz bir kareye tıklandı. Seçim sıfırlanıyor.");
+                    resetSelectionStates();
+                    drawBoard();
+                }
+            } else { // activeMultiJump yok, normal hamle veya seçim
+                const clickedPieceVal = currentBoardState[r_clk][c_clk];
+
+                if (clickedPieceVal === humanPlayerId) { // İnsanın kendi taşına tıklandı
+                    if (selectedPieceOriginalCoords && selectedPieceOriginalCoords.r === r_clk && selectedPieceOriginalCoords.c === c_clk) {
+                        console.log(`Aynı kendi taşına (${r_clk},${c_clk}) tekrar tıklandı: Seçim kaldırılıyor.`);
+                        resetSelectionStates();
+                        drawBoard();
+                    } else {
+                        console.log(`Kendi taşına (${r_clk},${c_clk}) tıklandı: Seçiliyor ve hamleler getiriliyor.`);
+                        selectedPieceOriginalCoords = { r: r_clk, c: c_clk };
+                        potentialMovesFromOrigCoords = [];
+                        try {
+                            const response = await fetch('/get_legal_moves_for_square', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ row: r_clk, col: c_clk })
+                            });
+                            const data = await response.json();
+                            if (response.ok) {
+                                potentialMovesFromOrigCoords = data.legal_moves;
+                                console.log(`Taş (${r_clk},${c_clk}) için geçerli hamleler alındı:`, JSON.stringify(potentialMovesFromOrigCoords));
+                                if (potentialMovesFromOrigCoords.length === 0) {
+                                    console.log("Bu taştan geçerli hamle yok.");
+                                    // İsteğe bağlı: Kullanıcıya mesaj gösterilebilir veya seçim hemen iptal edilebilir.
+                                    // Şimdilik seçili kalmasına izin veriyoruz, başka bir taşa tıklarsa zaten sıfırlanır.
+                                }
+                            } else {
+                                console.error("Geçerli hamleler alınamadı:", data.error);
+                                resetSelectionStates();
+                            }
+                        } catch (err) {
+                            console.error("API hatası (get_legal_moves):", err);
+                            resetSelectionStates();
+                        }
+                        drawBoard();
+                    }
+                } else if (selectedPieceOriginalCoords && clickedSquareElement.classList.contains('target-square')) {
+                    // Bir taş seçili ve bir hedef kareye tıklandı (bir hamlenin ilk adımı)
+                    console.log(`Bir hedef kareye (${r_clk},${c_clk}) tıklandı.`);
+                    
+                    const chosenMove = potentialMovesFromOrigCoords.find(
+                        m => (m.path_coords && m.path_coords.length > 1 && m.path_coords[1][0] === r_clk && m.path_coords[1][1] === c_clk) ||
+                             (m.type === 'simple' && m.end_pos[0] === r_clk && m.end_pos[1] === c_clk)
+                    );
+
+                    if (chosenMove) {
+                        console.log("Seçilen hamle detayı:", JSON.stringify(chosenMove));
+                        if (chosenMove.type === 'capture' && chosenMove.path_coords && chosenMove.path_coords.length > 2) {
+                            // Bu bir zincirleme yeme hamlesi
+                            console.log("Zincirleme yeme hamlesi başlatılıyor.");
+                            activeMultiJump = {
+                                move: chosenMove,
+                                currentIndexInPath: 1, // İlk zıplama yapıldı, şimdi path_coords[1] konumundayız
+                                boardStateSnapshot: createBoardSnapshotForMultiJump(currentBoardState, chosenMove, 1)
+                            };
+                            // selectedPieceOriginalCoords kalır, potentialMovesFromOrigCoords artık kullanılmayacak (activeMultiJump öncelikli)
+                            console.log("İlk boardStateSnapshot oluşturuldu:", JSON.stringify(activeMultiJump.boardStateSnapshot));
+                            drawBoard(); // Zincirleme yemenin ilk adımını ve sonraki hedefi göster
+                        } else {
+                            // Basit hamle veya tek adımlık yeme
+                            console.log("Basit veya tek adımlık yeme hamlesi. Sunucuya gönderiliyor.");
+                            await makeHumanMove(chosenMove);
+                            resetSelectionStates(); // Sunucudan yanıt gelince zaten güncellenecek
+                        }
+                    } else {
+                        console.error("Hedef kareye tıklandı ama eşleşen hamle bulunamadı. Bu beklenmedik.");
+                        resetSelectionStates();
+                        drawBoard();
+                    }
+                } else {
+                    // Geçersiz bir kareye (boş, rakip taşı vb.) tıklandı
+                    if (selectedPieceOriginalCoords) {
+                        console.log(`Seçim varken geçersiz bir kareye (${r_clk},${c_clk}) tıklandı. Seçim sıfırlanıyor.`);
+                        resetSelectionStates();
+                        drawBoard();
+                    } else {
+                        console.log(`Seçim yokken geçersiz bir kareye (${r_clk},${c_clk}) tıklandı. İşlem yok.`);
+                    }
+                }
+            }
+        }
+
+        async function makeHumanMove(moveObject) {
+            if (!isHumanTurnGlobal) return;
+            try {
+                const response = await fetch('/make_human_move', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ move: moveObject })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    updateGameDisplay(data);
+                    selectedPieceOriginalCoords = null;
+                    potentialMovesFromOrigCoords = [];
+                    drawBoard(); // Tahtayı hemen güncelle
+                    if (data.is_human_turn === false && !data.game_over_message) {
+                        // Sıra ajana geçti ve oyun bitmedi, ajanın hamlesini iste
+                        setTimeout(triggerAgentMove, 500); // Küçük bir gecikme ile
+                    }
+                } else {
+                    gameStatusMessageDisplay.textContent = data.error || "Hamle yapılamadı.";
+                    gameStatusMessageDisplay.className = 'error-message';
+                    selectedPieceOriginalCoords = null; // Hatalı hamle sonrası seçimi kaldır
+                    potentialMovesFromOrigCoords = [];
+                    drawBoard(); 
+                }
+            } catch (err) {
+                console.error("API hatası (make_human_move):", err);
+                gameStatusMessageDisplay.textContent = "Bir ağ hatası oluştu.";
+                gameStatusMessageDisplay.className = 'error-message';
+            }
+        }
+
+        async function triggerAgentMove() {
+            if (isHumanTurnGlobal || gameStatusMessageDisplay.textContent.includes("kazand")) return;
+            console.log("Ajanın hamlesi tetikleniyor...");
+            try {
+                turnInfoDisplay.textContent = "Sıra MuZero Agent'ta (Düşünüyor...)";
+                const response = await fetch('/make_agent_move', { method: 'POST' });
+                const data = await response.json();
+                if (data.success || (data.error && data.game_over_message)) { // Oyun bitmişse de güncelle
+                    updateGameDisplay(data);
+                    drawBoard();
+                } else {
+                    console.error("Ajan hamlesi başarısız:", data.error);
+                    // Ajan hamle yapamazsa ve oyun bitmemişse, bu bir problem.
+                    // Genellikle bu durum sunucu tarafında handle edilir (örneğin, insan kazanır).
+                    // updateGameDisplay çağrısı bu durumu da (game_over_message ile) göstermeli.
+                    if(!data.game_over_message){
+                        gameStatusMessageDisplay.textContent = data.error || "Ajan hamle yapamadı.";
+                        gameStatusMessageDisplay.className = 'error-message';
+                    }
+                }
+            } catch (err) {
+                console.error("API hatası (make_agent_move):", err);
+                gameStatusMessageDisplay.textContent = "Ajan hamlesi sırasında bir ağ hatası oluştu.";
+                gameStatusMessageDisplay.className = 'error-message';
+            }
+        }
+
+        function updateGameDisplay(data) {
+            currentBoardState = data.board;
+            currentPlayerDisplay.textContent = data.current_player;
+            isHumanTurnGlobal = data.is_human_turn;
+            humanPlayerId = data.human_player_id !== undefined ? data.human_player_id : humanPlayerId; 
+
+            if (humanPlayerId === P1_PIECE_JS) {
+                humanPlayerInfoDisplay.textContent = "Siz: Beyaz (P1)";
+            } else {
+                humanPlayerInfoDisplay.textContent = "Siz: Siyah (P2)";
+            }
+
+            if (data.game_over_message) {
+                gameStatusMessageDisplay.textContent = data.game_over_message;
+                if (data.game_over_message.includes("kazandınız") || data.game_over_message.includes("MuZero kazandı") || data.game_over_message.includes("berabere")){
+                     gameStatusMessageDisplay.className = 'game-over-message';   
+                } else {
+                     gameStatusMessageDisplay.className = 'error-message'; // Diğer oyun sonu mesajları (hata gibi)
+                }
+                turnInfoDisplay.textContent = "Oyun Bitti.";
+            } else {
+                gameStatusMessageDisplay.textContent = ''; // Oyun devam ediyorsa mesajı temizle
+                gameStatusMessageDisplay.className = '';
+                turnInfoDisplay.textContent = isHumanTurnGlobal ? "Sıra Sizde" : "Sıra MuZero Agent'ta";
+            }
+            
+            // Son hamle bilgisini güncelle
+            if (data.last_move_info) {
+                lastMoveContainer.style.display = 'block';
+                lastMovePlayerDisplay.textContent = data.last_move_info.player;
+                lastMoveTypeDisplay.textContent = data.last_move_info.type === 'capture' ? 'Yeme Hamlesi' : 'Basit Hamle';
+                lastMoveFromDisplay.textContent = `(${data.last_move_info.from.join(',')})`;
+                lastMoveToDisplay.textContent = `(${data.last_move_info.to.join(',')})`;
+                if (data.last_move_info.type === 'capture' && data.last_move_info.captured > 0) {
+                    lastMoveCapturedCountDisplay.textContent = data.last_move_info.captured;
+                    lastMoveCapturedWrapper.style.display = 'inline';
+                } else {
+                    lastMoveCapturedWrapper.style.display = 'none';
+                }
+            } else {
+                lastMoveContainer.style.display = 'none';
+            }
+
+            drawBoard(); // Her zaman tahtayı yeniden çiz
+        }
+
+        async function startGame(startColor) {
+            console.log(`${startColor} olarak yeni oyun başlatılıyor...`);
+            resetSelectionStates(); // Yeni oyun başlarken tüm seçimleri sıfırla
+            // selectedSquare = null; // Eski değişkenler, resetSelectionStates hallediyor
+            // potentialMovesForSelected = []; // Eski değişkenler
+            try {
+                const response = await fetch('/start_game', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ start_as: startColor })
+                });
+                const data = await response.json();
+                // human_player_id backend tarafından set edilecek, onu data'dan almamız gerekebilir.
+                // Şimdilik updateGameDisplay içinde humanPlayerId'yi güncelliyoruz.
+                updateGameDisplay(data); 
+                // Eğer insan siyahsa ve P1 (beyaz) başlıyorsa, ilk hamle ajana ait olmalı.
+                // Backend bunu handle etmeli veya client burada agent'ı tetiklemeli.
+                if (isHumanTurnGlobal === false && !data.game_over_message) {
+                    setTimeout(triggerAgentMove, 200); // Ajanın ilk hamlesi için
+                }
+
+            } catch (err) {
+                console.error("Oyun başlatma hatası:", err);
+                gameStatusMessageDisplay.textContent = "Oyun başlatılamadı.";
+                gameStatusMessageDisplay.className = 'error-message';
+            }
+        }
+
+        document.getElementById('startAsWhite').addEventListener('click', () => startGame('white'));
+        // document.getElementById('startAsBlack').addEventListener('click', () => startGame('black'));
+
+        // Sayfa yüklendiğinde ilk tahtayı çiz ve gerekirse ajanı tetikle
+        document.addEventListener('DOMContentLoaded', () => {
+            resetSelectionStates(); // Sayfa ilk yüklendiğinde de durumu sıfırla
+            drawBoard();
+            // Eğer sayfa yüklendiğinde sıra ajandaysa (örneğin, insan siyah seçmiş ve oyun ortasında sayfa yenilenmişse)
+            // VEYA insan siyah olarak başladıysa ve ilk hamle ajanınsa.
+            // Backend'den gelen is_human_turn bilgisine göre karar ver.
+            if (isHumanTurnGlobal === false && !gameStatusMessageDisplay.textContent.includes("kazand")) {
+                console.log("Sayfa yüklendi, sıra ajanda. Ajan hamlesi tetikleniyor.");
+                setTimeout(triggerAgentMove, 200); // İlk yüklemede ajanın oynaması için
+            }
+        });
+
+    </script>
+</body>
+</html> 
