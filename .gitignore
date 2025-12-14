@@ -1,3 +1,4 @@
 .venv/
 .idea/
 muzero_checkers/checkpoints/
+muzero_checkers/logs/
