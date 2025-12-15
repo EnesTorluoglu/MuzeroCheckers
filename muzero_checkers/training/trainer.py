@@ -216,7 +216,7 @@ class Trainer:
                 )
                 self.game_stats_logger.info(log_message)
 
-            min_steps_for_buffer = self.config.get('min_game_steps_for_buffer', 10) # Çok kısa oyunları ekleme
+            min_steps_for_buffer = self.config.get('min_game_steps_for_buffer', 6) # Çok kısa oyunları ekleme
             if game_data and len(game_data) >= min_steps_for_buffer :
                 self.replay_buffer.save_game(game_data)
                 # print(f"Oyun #{self.total_games_played_in_session} verisi buffer'a eklendi. Buffer boyutu: {len(self.replay_buffer)} oyun.")
@@ -229,69 +229,72 @@ class Trainer:
         return collected_games_in_epoch
 
     def train_step(self, current_train_step_in_epoch, total_train_steps_in_epoch):
-        """Bir eğitim adımı gerçekleştirir."""
         if not self.replay_buffer.is_ready():
-            return False 
-
-        # print("Replay buffer'dan batch örnekleniyor...") # Çok sık log
-        batch = self.replay_buffer.sample_batch()
-        if batch is None:
             return False
 
-        observations_batch, actions_batch, target_rewards_batch, target_policies_batch, target_values_batch = batch
-        
-        initial_hidden_states = self.agent.representation_net(observations_batch) 
+        batch = self.replay_buffer.sample_batch()
+        if batch is None: return False
 
-        total_loss_val = 0
-        value_loss_sum = 0
-        policy_loss_sum = 0
-        reward_loss_sum = 0
-        
-        current_hidden_states = initial_hidden_states
+        obs_b, act_b, rew_b, pol_b, val_b = batch
+        device = self.device
+
+        # device'a tasir
+        obs_b = obs_b.to(device, non_blocking=True)
+        act_b = act_b.to(device, non_blocking=True)
+        rew_b = rew_b.to(device, non_blocking=True)
+        pol_b = pol_b.to(device, non_blocking=True)
+        val_b = val_b.to(device, non_blocking=True)
+
+        initial_hidden = self.agent.representation_net(obs_b)
+
+        total_loss_val = 0.0
+
+        log_v_loss = 0.0
+        log_p_loss = 0.0
+        log_r_loss = 0.0
+
+        current_hidden = initial_hidden
         num_unroll_steps = self.config.get('num_unroll_steps', 5)
 
-        for k_step in range(num_unroll_steps + 1):
-            policy_logits_k, predicted_values_k = self.agent.prediction_net(current_hidden_states)
-            
-            value_loss = torch.nn.functional.mse_loss(predicted_values_k.squeeze(-1), target_values_batch[:, k_step])
-            total_loss_val += value_loss
-            value_loss_sum += value_loss.item()
+        for k in range(num_unroll_steps + 1):
+            logits, values = self.agent.prediction_net(current_hidden)
 
-            policy_loss = torch.nn.functional.cross_entropy(policy_logits_k, target_policies_batch[:, k_step])
-            total_loss_val += policy_loss
-            policy_loss_sum += policy_loss.item()
+            # Loss Calculations
+            v_loss = torch.nn.functional.mse_loss(values.squeeze(-1), val_b[:, k])
+            log_probs = torch.log_softmax(logits, dim=1)
+            p_loss = -(pol_b[:, k] * log_probs).sum(dim=1).mean()
 
-            if k_step < num_unroll_steps:
-                action_k = actions_batch[:, k_step].unsqueeze(-1)
-                next_hidden_states, predicted_rewards_k = self.agent.dynamics_net(current_hidden_states, action_k)
-                
-                reward_loss = torch.nn.functional.mse_loss(predicted_rewards_k.squeeze(-1), target_rewards_batch[:, k_step])
-                total_loss_val += reward_loss
-                reward_loss_sum += reward_loss.item()
-                
-                current_hidden_states = next_hidden_states
-        
+            # Weighted sum for gradient stability
+            gradient_scale = 1.0 if k == 0 else 1/num_unroll_steps
+
+            total_loss_val += (v_loss + p_loss) * gradient_scale
+
+            log_v_loss += v_loss.detach()
+            log_p_loss += p_loss.detach()
+
+            if k < num_unroll_steps:
+                action_k = act_b[:, k].unsqueeze(-1)
+                current_hidden, pred_rewards = self.agent.dynamics_net(current_hidden, action_k)
+
+                r_loss = torch.nn.functional.mse_loss(pred_rewards.squeeze(-1), rew_b[:, k])
+                total_loss_val += r_loss * gradient_scale
+                log_r_loss += r_loss.detach()
+
         self.agent.optimizer.zero_grad()
         total_loss_val.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.get_parameters(), self.config.get('max_grad_norm', 40.0))
         self.agent.optimizer.step()
 
-        # Loglama (her train_step için değil, belirli aralıklarla veya epoch sonu yapılabilir)
-        # Şimdilik her adımda yapalım, ama TensorBoard'a yazma sıklığı ayarlanabilir.
-        # Global step: self.current_epoch * total_train_steps_in_epoch + current_train_step_in_epoch
-        global_step_for_logging = self.current_epoch * total_train_steps_in_epoch + current_train_step_in_epoch
-        if global_step_for_logging % self.config.get('tensorboard_log_interval_steps', 10) == 0: # Her 10 train_step'te bir logla
-            num_terms_in_loss = num_unroll_steps + 1
-            avg_value_loss = value_loss_sum / num_terms_in_loss
-            avg_policy_loss = policy_loss_sum / num_terms_in_loss
-            avg_reward_loss = reward_loss_sum / num_unroll_steps if num_unroll_steps > 0 else 0
-            
-            self.writer.add_scalar('Train/TotalLoss_step', total_loss_val.item(), global_step_for_logging)
-            self.writer.add_scalar('Train/ValueLoss_step', avg_value_loss, global_step_for_logging)
-            self.writer.add_scalar('Train/PolicyLoss_step', avg_policy_loss, global_step_for_logging)
-            self.writer.add_scalar('Train/RewardLoss_step', avg_reward_loss, global_step_for_logging)
-            self.writer.add_scalar('Train/GradientNorm_step', grad_norm.item(), global_step_for_logging)
-            # print(f"Eğitim Adımı {global_step_for_logging}: Loss: {total_loss_val.item():.2f} (V:{avg_value_loss:.2f}, P:{avg_policy_loss:.2f}, R:{avg_reward_loss:.2f})")
+        # Logging Logic
+        global_step = self.current_epoch * total_train_steps_in_epoch + current_train_step_in_epoch
+        if global_step % self.config.get('tensorboard_log_interval_steps', 10) == 0:
+            terms = num_unroll_steps + 1
+            self.writer.add_scalar('Train/ValueLoss', log_v_loss / terms, global_step)
+            self.writer.add_scalar('Train/PolicyLoss', log_p_loss / terms, global_step)
+            self.writer.add_scalar('Train/RewardLoss', log_r_loss / num_unroll_steps, global_step)
+            self.writer.add_scalar('Train/TotalLoss', total_loss_val, global_step)
+            self.writer.add_scalar('Train/GradientNorm_step', grad_norm.item(), global_step)
+
         return True
 
     def run_training_loop(self):
@@ -307,7 +310,7 @@ class Trainer:
             print(f"\n--- Epoch {self.current_epoch + 1}/{num_epochs} --- GBuffer: {len(self.replay_buffer)} oyunlar, {self.total_steps_collected_in_session} adımlar ---")
 
             # 1. Self-Play ile veri topla
-            self.agent._set_train_mode(True) # Ağları ve MCTS'yi eğitim moduna al
+            self.agent._set_train_mode(False)
             print(f"{games_per_epoch} adet self-play oyunu başlatılıyor...")
             games_collected_this_epoch = self.collect_game_data(games_per_epoch)
             
@@ -346,21 +349,23 @@ class Trainer:
                     self.writer.add_scalar('SelfPlay_Cumulative/DrawRate_Overall', cumulative_draw_rate, self.total_games_played_in_session)
                     self.writer.add_scalar('SelfPlay_Cumulative/AvgGameLength_Overall', cumulative_avg_game_length, self.total_games_played_in_session)
 
-            # 2. Ağı eğit
+            # 2. Ağı eğit (Train Network)
+            did_train = False
             if self.replay_buffer.is_ready():
                 print(f"Epoch {self.current_epoch + 1}: Eğitim adımları başlıyor...")
-                self.agent._set_train_mode(True) # Tekrar emin olalım
+                self.agent._set_train_mode(True)
                 for train_step_num in range(train_steps_per_epoch):
                     self.train_step(train_step_num, train_steps_per_epoch)
+                did_train = True
             else:
-                print(f"Epoch {self.current_epoch + 1}: Eğitim için yeterli veri yok, buffer boyutu: {len(self.replay_buffer)}/{self.config.get('min_games_for_training')}")
-            
-            # EKLENECEK:
+                print(
+                    f"Epoch {self.current_epoch + 1}: Eğitim için yeterli veri yok, buffer boyutu:"
+                    f" {len(self.replay_buffer)}/{self.config.get('min_games_for_training')}")
 
-            #if self.replay_buffer.is_ready(): # Sadece eğitim yapıldıysa scheduler adımı at
-            #    self.agent.scheduler_step()
-
-
+            if did_train:
+                self.agent.scheduler_step()
+                current_lr = self.agent.optimizer.param_groups[0]['lr']
+                self.writer.add_scalar('Train_Epoch/LearningRate', current_lr, self.current_epoch)
 
             # Epoch sonu loglamaları
             self.writer.add_scalar('ReplayBuffer/Size_Games', len(self.replay_buffer), self.current_epoch)
@@ -368,17 +373,10 @@ class Trainer:
             
             buffer_fill_ratio = len(self.replay_buffer) / self.replay_buffer.window_size if self.replay_buffer.window_size > 0 else 0
             self.writer.add_scalar('ReplayBuffer/Fill_Ratio_Games', buffer_fill_ratio, self.current_epoch)
-            current_lr = self.agent.optimizer.param_groups[0]['lr']
-            self.writer.add_scalar('Train_Epoch/LearningRate', current_lr, self.current_epoch)
 
             # Checkpoint kaydet (belirli aralıklarla)
             if (self.current_epoch + 1) % self.config.get('checkpoint_interval_epochs', 10) == 0:
                 self._save_checkpoint()
-            
-            # ÇIKARTILACAK:
-
-            # Öğrenme oranı zamanlayıcısının adımını ilerlet (her epoch sonunda)
-            self.agent.scheduler_step()
 
             epoch_duration = time.time() - epoch_start_time
             self.writer.add_scalar('System/EpochDuration_sec', epoch_duration, self.current_epoch)

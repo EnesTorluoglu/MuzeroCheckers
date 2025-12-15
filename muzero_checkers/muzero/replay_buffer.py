@@ -41,8 +41,8 @@ class ReplayBuffer:
     def save_game(self, game_trace: GameTrace):
         """Tamamlanmış bir oyunu buffer'a ekler."""
         # if len(game_trace) < self.num_unroll_steps + self.td_steps :
-        if len(game_trace) <  8:  #self.num_unroll_steps + self.td_steps: # Yeterli adım yoksa ekleme
-            print(f"Uyarı: Oyun çok kısa ({len(game_trace)} adım), buffer'a eklenmiyor. Minimum: 8")
+        if len(game_trace) <  6:  #self.num_unroll_steps + self.td_steps: # Yeterli adım yoksa ekleme
+            print(f"Uyarı: Oyun çok kısa ({len(game_trace)} adım), buffer'a eklenmiyor. Minimum: 6")
             return
         self.buffer.append(game_trace)
 

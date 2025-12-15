@@ -30,5 +30,5 @@ CONFIG = {
     "checkpoint_interval_epochs": 50, # Checkpoint kaydetme sıklığı (epoch bazında)
     "learning_rate_decay_steps": 3000, # Kaç epoch'ta bir öğrenme oranı düşürülecek
     "learning_rate_decay_gamma": 0.5,   # Öğrenme oranının düşürülme faktörü
-    "min_game_steps_for_buffer": 8,   # Replay buffer'a eklenmesi için minimum oyun adım sayısı
+    "min_game_steps_for_buffer": 6,   # Replay buffer'a eklenmesi için minimum oyun adım sayısı
 } 
