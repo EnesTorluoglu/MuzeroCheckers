@@ -12,7 +12,7 @@ P2_PIECE = 2  # Oyuncu 2 (örneğin, Siyah), üst sıralardan başlar (yüksek i
 
 # Tahta boyutları (config'den alınacak şekilde daha sonra düzenlenebilir)
 BOARD_ROWS = 8
-BOARD_COLS = 4
+BOARD_COLS = 3
 
 # Oyun sonuçları için sabitler
 P1_WINS = 1
@@ -21,14 +21,14 @@ DRAW = 0
 NOT_OVER = -1 # Oyunun bitmediğini belirtir
 
 # Aksiyon Temsili için Sabitler
-NUM_SQUARES = BOARD_ROWS * BOARD_COLS # 8 * 4 = 32
+NUM_SQUARES = BOARD_ROWS * BOARD_COLS # 8 * 3 = 24
 # Her kareden 4 olası "niyet" (ileri-sol-basit, ileri-sağ-basit, ileri-sol-yeme, ileri-sağ-yeme)
 ACTION_TYPE_SL = 0  # Simple Left
 ACTION_TYPE_SR = 1  # Simple Right
 ACTION_TYPE_CL = 2  # Capture Left
 ACTION_TYPE_CR = 3  # Capture Right
 NUM_ACTION_TYPES = 4
-ACTION_SPACE_SIZE = NUM_SQUARES * NUM_ACTION_TYPES # 32 * 4 = 128. Bu CONFIG ile uyumlu olmalı.
+ACTION_SPACE_SIZE = NUM_SQUARES * NUM_ACTION_TYPES # 24 * 4 = 96. Bu CONFIG ile uyumlu olmalı.
 
 class Board:
     def __init__(self):
@@ -59,13 +59,13 @@ class Board:
         self.NUM_ACTION_TYPES = NUM_ACTION_TYPES
         self.ACTION_SPACE_SIZE = ACTION_SPACE_SIZE 
         # CONFIG['action_space_size'] ile uyumlu olduğunu kontrol et (idealde CONFIG'den alınır)
-        assert self.ACTION_SPACE_SIZE == 128, "Board ACTION_SPACE_SIZE, config ile uyuşmuyor!"
+        assert self.ACTION_SPACE_SIZE == 96, "Board ACTION_SPACE_SIZE, config ile uyuşmuyor!"
 
     def _initialize_pieces(self):
         """
         Taşları başlangıç pozisyonlarına yerleştirir.
-        Oyuncu 1 (P1_PIECE): İlk 3 sıra, her sırada 2 taş, çapraz dizilim.
-        Oyuncu 2 (P2_PIECE): Son 3 sıra, her sırada 2 taş, çapraz dizilim.
+        Oyuncu 1 (P1_PIECE): İlk 3 sıra, çapraz dizilim.
+        Oyuncu 2 (P2_PIECE): Son 3 sıra, çapraz dizilim.
         """
         # Oyuncu 1'in taşları
         for r in range(3):  # İlk 3 sıra (0, 1, 2)
@@ -79,12 +79,9 @@ class Board:
                 if (r + c) % 2 == 0:  # Sadece uygun çapraz karelere
                     self.board[r, c] = P2_PIECE
         
-        # Kurala göre her sırada 2 şer taş olacak ve çapraz konumda olacaklar.
-        # Yukarıdaki _initialize_pieces mantığı 4x3 alanda 6 taşı doğru dizer.
-        # (0,0), (0,2)
-        # (1,1), (1,3) -> Eğer sütun 4 ise (1,3) geçerli.
-        # (2,0), (2,2)
-        # Bu mantık doğru. 4 sütun için.
+        # Kurala göre her sırada çapraz konumda taşlar olacak.
+        # Yukarıdaki _initialize_pieces mantığı 3 sütun için doğru çalışır.
+        # 3 sütun ile: (0,0), (0,2) / (1,1) / (2,0), (2,2) gibi çapraz dizilim oluşur.
 
     def display_board(self, return_string=False):
         """Tahtayı konsolda gösterir veya string olarak döndürür."""

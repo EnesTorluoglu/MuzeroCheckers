@@ -139,7 +139,7 @@ class MuZeroAgent:
         )
 
         # 4. Aksiyon dağılımını al (Bu, tüm action_space_size için bir dağılım verir)
-        temperature_for_sampling = self.config.get('mcts_temperature_train', 1.0) if is_training else self.config.get('mcts_temperature_play', 0)
+        temperature_for_sampling = self.config.get('mcts_temperature_train', 1.0) if is_training else self.config.get('mcts_temperature_play', 0.0)
         # MCTS politikası (eğitim hedefi için, genellikle temperature=1.0 ile alınır, gürültüsüz olabilir)
         # get_mcts_action_distribution, root_node'daki çocukların ziyaret sayılarına göre bir dağılım verir.
         # Bu, target policy için uygundur.
@@ -164,7 +164,7 @@ class MuZeroAgent:
             if is_training: self._set_train_mode(True)
             return None, None, np.zeros(self.action_space_size, dtype=np.float32), 0.0
 
-        # mcts_sampling_action_probs (128,) boyutunda.
+        # mcts_sampling_action_probs (96,) boyutunda.
         probs_for_sampling_legal_actions = mcts_sampling_action_probs[legal_action_ids_list]
         
         if np.sum(probs_for_sampling_legal_actions) < 1e-6 or len(legal_action_ids_list) == 0:

@@ -1,6 +1,6 @@
 # MuZero Checkers
 
-4x8 tahtada MuZero algoritması ile dama oynamayı öğrenen bir yapay zeka projesi.
+3x8 tahtada MuZero algoritması ile dama oynamayı öğrenen bir yapay zeka projesi.
 
 ## Özellikler
 

@@ -7,9 +7,10 @@ import os # trainer checkpoint path için
 import logging # Yeni import
 from torch.utils.tensorboard import SummaryWriter
 
-from muzero_checkers.muzero.agent import MuZeroAgent
-from muzero_checkers.muzero.replay_buffer import ReplayBuffer, GameTrace
-from muzero_checkers.checkers_game.board import Board # Ortam için
+
+from muzero.agent import MuZeroAgent
+from muzero.replay_buffer import ReplayBuffer, GameTrace
+from checkers_game.board import Board # Ortam için
 # from muzero_checkers.muzero.config import CONFIG # config trainer'a init ile veriliyor
 
 class Trainer:
@@ -230,7 +231,7 @@ class Trainer:
     def train_step(self, current_train_step_in_epoch, total_train_steps_in_epoch):
         """Bir eğitim adımı gerçekleştirir."""
         if not self.replay_buffer.is_ready():
-            return False
+            return False 
 
         # print("Replay buffer'dan batch örnekleniyor...") # Çok sık log
         batch = self.replay_buffer.sample_batch()
@@ -238,30 +239,20 @@ class Trainer:
             return False
 
         observations_batch, actions_batch, target_rewards_batch, target_policies_batch, target_values_batch = batch
-
-        # -------------------------------------------------------------
-        device = self.config['device']
-
-        observations_batch = observations_batch.to(device)
-        actions_batch = actions_batch.to(device)
-        target_rewards_batch = target_rewards_batch.to(device)
-        target_policies_batch = target_policies_batch.to(device)
-        target_values_batch = target_values_batch.to(device)
-        # -------------------------------------------------------------
-
-        initial_hidden_states = self.agent.representation_net(observations_batch)
+        
+        initial_hidden_states = self.agent.representation_net(observations_batch) 
 
         total_loss_val = 0
         value_loss_sum = 0
         policy_loss_sum = 0
         reward_loss_sum = 0
-
+        
         current_hidden_states = initial_hidden_states
         num_unroll_steps = self.config.get('num_unroll_steps', 5)
 
         for k_step in range(num_unroll_steps + 1):
             policy_logits_k, predicted_values_k = self.agent.prediction_net(current_hidden_states)
-
+            
             value_loss = torch.nn.functional.mse_loss(predicted_values_k.squeeze(-1), target_values_batch[:, k_step])
             total_loss_val += value_loss
             value_loss_sum += value_loss.item()
@@ -273,13 +264,13 @@ class Trainer:
             if k_step < num_unroll_steps:
                 action_k = actions_batch[:, k_step].unsqueeze(-1)
                 next_hidden_states, predicted_rewards_k = self.agent.dynamics_net(current_hidden_states, action_k)
-
+                
                 reward_loss = torch.nn.functional.mse_loss(predicted_rewards_k.squeeze(-1), target_rewards_batch[:, k_step])
                 total_loss_val += reward_loss
                 reward_loss_sum += reward_loss.item()
-
+                
                 current_hidden_states = next_hidden_states
-
+        
         self.agent.optimizer.zero_grad()
         total_loss_val.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.get_parameters(), self.config.get('max_grad_norm', 40.0))
@@ -294,7 +285,7 @@ class Trainer:
             avg_value_loss = value_loss_sum / num_terms_in_loss
             avg_policy_loss = policy_loss_sum / num_terms_in_loss
             avg_reward_loss = reward_loss_sum / num_unroll_steps if num_unroll_steps > 0 else 0
-
+            
             self.writer.add_scalar('Train/TotalLoss_step', total_loss_val.item(), global_step_for_logging)
             self.writer.add_scalar('Train/ValueLoss_step', avg_value_loss, global_step_for_logging)
             self.writer.add_scalar('Train/PolicyLoss_step', avg_policy_loss, global_step_for_logging)
@@ -361,8 +352,6 @@ class Trainer:
                 self.agent._set_train_mode(True) # Tekrar emin olalım
                 for train_step_num in range(train_steps_per_epoch):
                     self.train_step(train_step_num, train_steps_per_epoch)
-
-                self.agent.scheduler_step()
             else:
                 print(f"Epoch {self.current_epoch + 1}: Eğitim için yeterli veri yok, buffer boyutu: {len(self.replay_buffer)}/{self.config.get('min_games_for_training')}")
             
@@ -431,7 +420,7 @@ class Trainer:
         """Trainer durumunu yükler."""
         if path and os.path.exists(path):
             try:
-                checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+                checkpoint = torch.load(path, map_location=self.device) 
                 self.current_epoch = checkpoint.get('epoch', 0)
                 self.total_games_played_in_session = checkpoint.get('total_games_played_in_session', 0)
                 self.total_steps_collected_in_session = checkpoint.get('total_steps_collected_in_session', 0)
@@ -478,10 +467,10 @@ if __name__ == '__main__':
     CONFIG['max_moves_per_game'] = 10 # Test için kısa oyunlar
     CONFIG['detailed_log_game_interval'] = 1 # Her oyunu logla (test için)
     CONFIG['observation_channels'] = 3
-    CONFIG['action_space_size'] = 128
+    CONFIG['action_space_size'] = 96
     CONFIG['hidden_state_channels'] = 16 # Test için düşük tutalım
     CONFIG['board_rows'] = 8
-    CONFIG['board_cols'] = 4
+    CONFIG['board_cols'] = 3
     CONFIG['mcts_c_puct'] = 1.25
     CONFIG['mcts_pb_c_base'] = 19652
     CONFIG['mcts_pb_c_init'] = 1.25

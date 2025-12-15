@@ -4,10 +4,10 @@ import torch
 import numpy as np
 
 # Proje içi importlar
-from muzero_checkers.checkers_game.board import Board, P1_PIECE, P2_PIECE, P1_WINS, P2_WINS, DRAW, NOT_OVER
-from muzero_checkers.muzero.agent import MuZeroAgent
+from checkers_game.board import Board, P1_PIECE, P2_PIECE, P1_WINS, P2_WINS, DRAW, NOT_OVER
+from muzero.agent import MuZeroAgent
 # Ana CONFIG'i doğrudan import etmek yerine, create_app içinde bir kopya alacağız veya güncelleyeceğiz.
-from muzero_checkers.muzero.config import CONFIG as global_config_original
+from muzero.config import CONFIG as global_config_original
 
 def get_player_name_web(player_code):
     if player_code == P1_PIECE:

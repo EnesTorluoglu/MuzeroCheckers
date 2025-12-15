@@ -3,10 +3,10 @@
 CONFIG = {
     "seed": 42,
     "board_rows": 8,
-    "board_cols": 4,
+    "board_cols": 3,
     # Diğer hiperparametreler buraya eklenecek
     "observation_channels": 3, # P1 pieces, P2 pieces, player_to_move plane
-    "action_space_size": 128,  # Örnek: 8*4 (kare sayısı) * 4 (olası hamle türü/yönü)
+    "action_space_size": 96,  # Örnek: 8*3 (kare sayısı) * 4 (olası hamle türü/yönü)
     "hidden_state_channels": 64, # Gizli durumdaki kanal sayısı
     "num_unroll_steps": 5,     # MCTS sırasında dinamik ağının kaç adım ileri gideceği
     "td_steps": 10,             # Temporal Difference adımları (n-step return için)

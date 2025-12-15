@@ -1,6 +1,6 @@
 # Oyunun genel akışını ve durumunu yönetecek.
 
-from board import Board, P1_PIECE, P2_PIECE, P1_WINS, P2_WINS, DRAW, NOT_OVER
+from .board import Board, P1_PIECE, P2_PIECE, P1_WINS, P2_WINS, DRAW, NOT_OVER
 
 class Game:
     def __init__(self):

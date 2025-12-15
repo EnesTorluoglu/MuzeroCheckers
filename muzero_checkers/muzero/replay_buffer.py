@@ -22,7 +22,7 @@ class GameTrace:
         self.observations.append(observation)
         self.actions.append(action)
         self.rewards.append(reward)
-        self.policies.append(policy) # MCTS'ten gelen tam politika (128,)
+        self.policies.append(policy) # MCTS'ten gelen tam politika (96,)
         self.values.append(value) # Hedef değer (n-step return veya oyun sonu)
         self.total_steps += 1
 
@@ -115,7 +115,7 @@ class ReplayBuffer:
 
             # Gözlemler: s_start_idx
             # Bu, representation network'e verilecek.
-            observations_batch.append(game.observations[start_idx].to(self.device))
+            observations_batch.append(game.observations[start_idx])
 
             # Aksiyonlar: a_{start_idx} ... a_{start_idx + num_unroll_steps - 1} (K adet)
             # Bunlar dynamics network'e verilecek.
@@ -241,8 +241,8 @@ if __name__ == '__main__':
         'td_steps': 2,         # n
         'observation_channels': 3,
         'board_rows': 8,
-        'board_cols': 4,
-        'action_space_size': 128,
+        'board_cols': 3,
+        'action_space_size': 96,
         'discount_factor': 0.9,
         'device': torch.device('cpu')
     }

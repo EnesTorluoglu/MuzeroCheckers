@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# from config import CONFIG
+from .config import CONFIG
 
 class RepresentationNetwork(nn.Module):
     def __init__(self, observation_shape, hidden_state_channels):
@@ -21,7 +21,7 @@ class RepresentationNetwork(nn.Module):
         self.conv1 = nn.Conv2d(self.obs_channels, hidden_state_channels // 2, kernel_size=3, stride=1, padding=1)
         self.bn1 = nn.BatchNorm2d(hidden_state_channels // 2)
         # Tahta boyutlarına göre çıktı boyutunu ayarlayacak katmanlar eklenecek
-        # Örneğin, 8x4 tahtayı daha küçük bir gizli duruma (örneğin 4x2 veya 2x1) indirgeyebiliriz.
+        # Örneğin, 8x3 tahtayı daha küçük bir gizli duruma (örneğin 4x2 veya 2x1) indirgeyebiliriz.
         # Veya tamamen fully connected bir gizli duruma da geçilebilir.
         # Şimdilik, girdiyle aynı boyutta bir gizli durum varsayalım (stride=1, padding=1 ile)
         self.conv2 = nn.Conv2d(hidden_state_channels // 2, hidden_state_channels, kernel_size=3, stride=1, padding=1)
