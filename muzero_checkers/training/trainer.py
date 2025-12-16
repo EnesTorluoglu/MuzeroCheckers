@@ -7,10 +7,9 @@ import os # trainer checkpoint path için
 import logging # Yeni import
 from torch.utils.tensorboard import SummaryWriter
 
-
-from muzero.agent import MuZeroAgent
-from muzero.replay_buffer import ReplayBuffer, GameTrace
-from checkers_game.board import Board # Ortam için
+from muzero_checkers.muzero.agent import MuZeroAgent
+from muzero_checkers.muzero.replay_buffer import ReplayBuffer, GameTrace
+from muzero_checkers.checkers_game.board import Board
 # from muzero_checkers.muzero.config import CONFIG # config trainer'a init ile veriliyor
 
 class Trainer:
@@ -72,8 +71,9 @@ class Trainer:
         game_steps = 0
         
         # Detaylı loglama kontrolü
-        should_log_details = (game_num_overall == 1) or \
-                             (self.detailed_log_interval > 0 and game_num_overall % self.detailed_log_interval == 0)
+        should_log_details = False
+        '''should_log_details = (game_num_overall == 1) or \
+                             (self.detailed_log_interval > 0 and game_num_overall % self.detailed_log_interval == 0)'''
 
         if should_log_details:
             self.detailed_game_logger.info(f"--- Detaylı Log Başlangıcı: Oyun #{game_num_overall} ---")
@@ -193,28 +193,29 @@ class Trainer:
             
             self.total_games_played_in_session += 1 
 
-            if game_data and game_data.final_winner_code is not None:
+            if game_data and game_data.game_over_reason is not None:
                 # Kümülatif istatistikleri güncelle
-                winner_text = ""
-                if game_data.final_winner_code == board_ref.P1_WINS:
+                #winner_text = ""
+                if game_data.game_over_reason == board_ref.P1_WINS:
                     self.session_p1_wins += 1
-                    winner_text = "White wins!"
-                elif game_data.final_winner_code == board_ref.P2_WINS:
+                    #winner_text = "White wins!"
+                elif game_data.game_over_reason == board_ref.P2_WINS:
                     self.session_p2_wins += 1
-                    winner_text = "Black wins!"
-                elif game_data.final_winner_code == board_ref.DRAW:
+                    #winner_text = "Black wins!"
+                elif game_data.game_over_reason == board_ref.DRAW:
                     self.session_draws += 1
-                    winner_text = "Draw!"
-                else: # NOT_OVER veya beklenmedik bir durum
-                    winner_text = f"Game Over (Code: {game_data.final_winner_code})"
+                    #winner_text = "Draw!"
+                #else: # NOT_OVER veya beklenmedik bir durum
+                    #winner_text = f"Game Over (Code: {game_data.game_over_reason})"
 
                 # Log mesajını oluştur ve yaz
-                log_message = (
-                    f"Game #{self.total_games_played_in_session} - {winner_text} "
-                    f"Stats: Total: {self.total_games_played_in_session}, "
-                    f"White: {self.session_p1_wins}, Black: {self.session_p2_wins}, Draws: {self.session_draws}"
-                )
-                self.game_stats_logger.info(log_message)
+                '''if self.total_games_played_in_session % 20 == 0:
+                    log_message = (
+                        f"Game #{self.total_games_played_in_session} - {winner_text} "
+                        f"Stats: Total: {self.total_games_played_in_session}, "
+                        f"White: {self.session_p1_wins}, Black: {self.session_p2_wins}, Draws: {self.session_draws}"
+                    )
+                    self.game_stats_logger.info(log_message)'''
 
             min_steps_for_buffer = self.config.get('min_game_steps_for_buffer', 10) # Çok kısa oyunları ekleme
             if game_data and len(game_data) >= min_steps_for_buffer :
@@ -222,7 +223,7 @@ class Trainer:
                 # print(f"Oyun #{self.total_games_played_in_session} verisi buffer'a eklendi. Buffer boyutu: {len(self.replay_buffer)} oyun.")
                 collected_games_in_epoch.append(game_data)
             elif game_data:
-                 print(f"Uyarı: Oyun #{self.total_games_played_in_session} çok kısa ({len(game_data)} adım), buffer\'a eklenmiyor. Min: {min_steps_for_buffer}")
+                 #print(f"Uyarı: Oyun #{self.total_games_played_in_session} çok kısa ({len(game_data)} adım), buffer\'a eklenmiyor. Min: {min_steps_for_buffer}")
                  collected_games_in_epoch.append(game_data) # Yine de istatistik için tut
             else:
                 pass # print(f"Oyun #{self.total_games_played_in_session + 1} (veya sonrası) veri üretemedi, atlanıyor.")
@@ -239,7 +240,14 @@ class Trainer:
             return False
 
         observations_batch, actions_batch, target_rewards_batch, target_policies_batch, target_values_batch = batch
-        
+        # Move everything to the correct device
+        device = self.config['device']
+        observations_batch = observations_batch.to(device)
+        actions_batch = actions_batch.to(device)
+        target_rewards_batch = target_rewards_batch.to(device)
+        target_policies_batch = target_policies_batch.to(device)
+        target_values_batch = target_values_batch.to(device)
+
         initial_hidden_states = self.agent.representation_net(observations_batch) 
 
         total_loss_val = 0
@@ -310,15 +318,18 @@ class Trainer:
             self.agent._set_train_mode(True) # Ağları ve MCTS'yi eğitim moduna al
             print(f"{games_per_epoch} adet self-play oyunu başlatılıyor...")
             games_collected_this_epoch = self.collect_game_data(games_per_epoch)
-            
+
+            self_play_time = time.time() - epoch_start_time
+            print(f"Time passed self play: {self_play_time:.2f}s")
+
             # Epoch istatistiklerini hesapla ve logla
             if games_collected_this_epoch:
-                num_p1_wins_epoch = sum(1 for g in games_collected_this_epoch if g.final_winner_code == Board().P1_WINS)
-                num_p2_wins_epoch = sum(1 for g in games_collected_this_epoch if g.final_winner_code == Board().P2_WINS)
-                num_draws_epoch = sum(1 for g in games_collected_this_epoch if g.final_winner_code == Board().DRAW)
+                num_p1_wins_epoch = sum(1 for g in games_collected_this_epoch if g.game_over_reason == Board().P1_WINS)
+                num_p2_wins_epoch = sum(1 for g in games_collected_this_epoch if g.game_over_reason == Board().P2_WINS)
+                num_draws_epoch = sum(1 for g in games_collected_this_epoch if g.game_over_reason == Board().DRAW)
                 total_valid_games_epoch = len(games_collected_this_epoch)
                 
-                avg_game_length_epoch = np.mean([g.final_game_length for g in games_collected_this_epoch if g.final_game_length is not None]) if total_valid_games_epoch > 0 else 0
+                avg_game_length_epoch = np.mean([g.total_steps for g in games_collected_this_epoch if g.total_steps is not None]) if total_valid_games_epoch > 0 else 0
 
                 self.writer.add_scalar('SelfPlay_Epoch/P1_WinRate', num_p1_wins_epoch / total_valid_games_epoch if total_valid_games_epoch > 0 else 0, self.current_epoch)
                 self.writer.add_scalar('SelfPlay_Epoch/P2_WinRate', num_p2_wins_epoch / total_valid_games_epoch if total_valid_games_epoch > 0 else 0, self.current_epoch)
@@ -346,6 +357,10 @@ class Trainer:
                     self.writer.add_scalar('SelfPlay_Cumulative/DrawRate_Overall', cumulative_draw_rate, self.total_games_played_in_session)
                     self.writer.add_scalar('SelfPlay_Cumulative/AvgGameLength_Overall', cumulative_avg_game_length, self.total_games_played_in_session)
 
+            #tensor_log_time = time.time() - self_play_time
+            #print(f"Time passed tensor log: {tensor_log_time:.2f}s")
+
+            train_time = time.time()
             # 2. Ağı eğit
             if self.replay_buffer.is_ready():
                 print(f"Epoch {self.current_epoch + 1}: Eğitim adımları başlıyor...")
@@ -354,13 +369,12 @@ class Trainer:
                     self.train_step(train_step_num, train_steps_per_epoch)
             else:
                 print(f"Epoch {self.current_epoch + 1}: Eğitim için yeterli veri yok, buffer boyutu: {len(self.replay_buffer)}/{self.config.get('min_games_for_training')}")
-            
-            # EKLENECEK:
 
-            #if self.replay_buffer.is_ready(): # Sadece eğitim yapıldıysa scheduler adımı at
-            #    self.agent.scheduler_step()
+            if self.replay_buffer.is_ready(): # Sadece eğitim yapıldıysa scheduler adımı at
+                self.agent.scheduler_step()
 
-
+            train_time = time.time() - train_time
+            print(f"Time passed training: {train_time:.2f}s")
 
             # Epoch sonu loglamaları
             self.writer.add_scalar('ReplayBuffer/Size_Games', len(self.replay_buffer), self.current_epoch)
@@ -374,11 +388,6 @@ class Trainer:
             # Checkpoint kaydet (belirli aralıklarla)
             if (self.current_epoch + 1) % self.config.get('checkpoint_interval_epochs', 10) == 0:
                 self._save_checkpoint()
-            
-            # ÇIKARTILACAK:
-
-            # Öğrenme oranı zamanlayıcısının adımını ilerlet (her epoch sonunda)
-            self.agent.scheduler_step()
 
             epoch_duration = time.time() - epoch_start_time
             self.writer.add_scalar('System/EpochDuration_sec', epoch_duration, self.current_epoch)
@@ -450,7 +459,8 @@ class Trainer:
 
 # Ana çalıştırma bloğu (main.py'de olacak)
 if __name__ == '__main__':
-    # CONFIG güncellemeleri (test için)
+    """
+    #CONFIG güncellemeleri (test için)
     CONFIG['device'] = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     CONFIG['log_dir'] = 'logs/muzero_checkers_testrun_trainer'
     CONFIG['trainer_checkpoint_path'] = 'checkpoints/trainer_state_test_trainer.pth'
@@ -480,3 +490,4 @@ if __name__ == '__main__':
 
     trainer = Trainer(CONFIG)
     trainer.run_training_loop() 
+    """
