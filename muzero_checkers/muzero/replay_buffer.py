@@ -115,7 +115,7 @@ class ReplayBuffer:
 
             # Gözlemler: s_start_idx
             # Bu, representation network'e verilecek.
-            observations_batch.append(game.observations[start_idx])
+            observations_batch.append(game.observations[start_idx].to(self.device))
 
             # Aksiyonlar: a_{start_idx} ... a_{start_idx + num_unroll_steps - 1} (K adet)
             # Bunlar dynamics network'e verilecek.

@@ -429,7 +429,7 @@ class Trainer:
         """Trainer durumunu yükler."""
         if path and os.path.exists(path):
             try:
-                checkpoint = torch.load(path, map_location=self.device) 
+                checkpoint = torch.load(path, map_location=self.device, weights_only=False)
                 self.current_epoch = checkpoint.get('epoch', 0)
                 self.total_games_played_in_session = checkpoint.get('total_games_played_in_session', 0)
                 self.total_steps_collected_in_session = checkpoint.get('total_steps_collected_in_session', 0)

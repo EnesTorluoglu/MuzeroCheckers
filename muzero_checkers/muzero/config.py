@@ -31,4 +31,5 @@ CONFIG = {
     "learning_rate_decay_steps": 3000, # Kaç epoch'ta bir öğrenme oranı düşürülecek
     "learning_rate_decay_gamma": 0.5,   # Öğrenme oranının düşürülme faktörü
     "min_game_steps_for_buffer": 8,   # Replay buffer'a eklenmesi için minimum oyun adım sayısı
+    "min_games_for_training": 20, # 1 epoch egitim icin bufferde en az bu kadar oyun olmali
 } 
