@@ -3,6 +3,7 @@
 import math
 import numpy as np
 import torch
+from torch.distributions import Dirichlet
 
 from .config import CONFIG
 
@@ -65,9 +66,11 @@ def run_mcts_simulations(root_hidden_state, representation_net, dynamics_net, pr
     # Kök düğümü oluştur
     # Kök düğüm için öncül olasılık (prior) aslında PredictionNetwork'ten gelir.
     # Burada ilk olarak bir tahmin yapmamız gerekiyor.
+    device = root_hidden_state.device  # GPU/CPU cihazını al
+    
     with torch.no_grad():
         policy_logits, value = prediction_net(root_hidden_state.unsqueeze(0)) # Unsqueeze for batch dim
-        policy_probs = torch.softmax(policy_logits, dim=1).squeeze(0).cpu().numpy()
+        policy_probs_tensor = torch.softmax(policy_logits, dim=1).squeeze(0)  # GPU'da tut
         root_value = value.item()
 
     root_node = Node(prior_prob=1.0) # Root'un prior'u 1.0 veya tüm aksiyonlara dağılmış olabilir, prediction'dan alacağız.
@@ -79,12 +82,15 @@ def run_mcts_simulations(root_hidden_state, representation_net, dynamics_net, pr
     if is_training and CONFIG.get('mcts_add_dirichlet_noise', True): # Sadece eğitimde ve config izin veriyorsa
         dirichlet_alpha = CONFIG.get('dirichlet_alpha', 0.3)
         exploration_fraction = CONFIG.get('exploration_fraction', 0.25)
-        # Sadece geçerli aksiyonlara Dirichlet gürültüsü eklemek daha mantıklı olabilir.
-        # Şimdilik tüm aksiyon uzayına ekleyelim.
-        noise = np.random.dirichlet([dirichlet_alpha] * CONFIG['action_space_size'])
-        policy_probs_noisy = (1 - exploration_fraction) * policy_probs + exploration_fraction * noise
+        # PyTorch Dirichlet kullan - GPU'da kalır
+        action_space_size = CONFIG['action_space_size']
+        dirichlet_dist = Dirichlet(torch.full((action_space_size,), dirichlet_alpha, device=device))
+        noise = dirichlet_dist.sample()
+        policy_probs_noisy = (1 - exploration_fraction) * policy_probs_tensor + exploration_fraction * noise
+        # Şimdi numpy'a çevir (maskeleme için gerekli)
+        policy_probs_noisy = policy_probs_noisy.cpu().numpy()
     else:
-        policy_probs_noisy = policy_probs
+        policy_probs_noisy = policy_probs_tensor.cpu().numpy()
 
     # Root düğümü ilk genişletme
     _expand_node(node_to_expand=root_node, 
@@ -192,32 +198,29 @@ def run_mcts_simulations(root_hidden_state, representation_net, dynamics_net, pr
 
 
         # 3. Backpropagation (Geri Yayılım)
-        for node_in_path in reversed(search_path):
+        # MuZero'da değer hesabı: Q(s,a) = r(s,a) + γ * V(s')
+        # search_path'i sondan başa (leaf -> root) gezerken:
+        # - value_for_backup başlangıçta yaprak düğümün V(s) değeridir
+        # - Her düğüme çıkarken, o düğümün Q-değerini güncelleriz
+        # - Sonra bir üst düğüme iletilecek değeri hazırlarız: r + γ * value_for_backup
+        
+        discount_factor = CONFIG.get('discount_factor', 0.997)
+        
+        for i, node_in_path in enumerate(reversed(search_path)):
             node_in_path.visit_count += 1
-            # Geri yayılımda, bir düğümün ödül toplamına, çocuğundan gelen değer (value_for_backup) 
-            # VE o çocuğa ulaşmak için yapılan aksiyondan kaynaklanan anlık ödül (child.predicted_reward) eklenir.
-            # Root node için predicted_reward yoktur.
-            # value_for_backup, en alttaki yaprak düğümün (veya ondan sonraki terminal durumun) değeridir.
-            # Bir üstteki düğüme geçerken, bu değere o adımdaki anlık ödül eklenir.
-            if node_in_path.parent: # Root değilse
-                # value_for_backup, bir sonraki (alt) düğümün değeriydi.
-                # Bu düğüme (node_in_path) geldiğimizde, node_in_path.predicted_reward (eğer varsa) bu değere eklenmeli.
-                # Daha doğrusu, node_in_path.reward_sum += (bir_sonraki_dugumun_degeri + node_in_path.predicted_reward)
-                # Bu mantık biraz karışık. Şöyle düşünelim:
-                # Q(s,a) = R(s,a) + gamma * V(s')
-                # node_in_path.reward_sum += value_for_backup
-                # value_for_backup = (node_in_path.predicted_reward or 0.0) + value_for_backup # Bir sonraki (üst) düğüme bu değer gider.
-                pass # Bu kısım aşağıda daha net düzenlenecek.
-
-            # Basitleştirilmiş geri yayılım: Her düğüme yaprak düğümün değerini yay.
-            # MuZero'da ödüller de yayılır.
-            # value_for_backup en uçtaki (leaf) düğümün değeriyle başlar.
-            # Bir üstteki node'a çıkarken, o node'a gelmek için alınan action'ın (yani bir alttaki child'ın) predicted_reward'ı eklenir.
-            current_value_estimate = value_for_backup 
-            node_in_path.reward_sum += current_value_estimate
-            if node_in_path.predicted_reward is not None: # Root node'da predicted_reward olmaz
-                 value_for_backup = node_in_path.predicted_reward + CONFIG.get('discount_factor', 0.997) * value_for_backup
-            # else: root node, bir sonraki iterasyonda kullanılmayacak.
+            
+            # Bu düğümün reward_sum'ına value_for_backup'ı ekle
+            # İlk iterasyonda (yaprak düğüm) bu V(s_leaf)'dir
+            # Sonraki iterasyonlarda bu r + γ*V(child) formülünden gelir
+            node_in_path.reward_sum += value_for_backup
+            
+            # Bir sonraki iterasyon için (üst düğüme geçerken) value_for_backup'ı güncelle
+            # Bu düğümün (node_in_path) predicted_reward'ı, bu düğüme gelinirken alınan ödüldür
+            # Yani ebeveynin bakış açısından: Q(parent, action) = r(node) + γ * V(node)
+            if node_in_path.predicted_reward is not None:
+                # Bu düğüm root değil, predicted_reward var
+                value_for_backup = node_in_path.predicted_reward + discount_factor * value_for_backup
+            # else: Bu root node, daha fazla backup yok (döngü bitiyor)
 
     return root_node
 
@@ -248,30 +251,26 @@ def _expand_node(node_to_expand: Node, policy_probabilities, predicted_value, hi
             # Bu durumda çocuk oluşturulmayacak.
             final_policy_for_expansion = np.zeros_like(policy_probabilities)
         else:
-            legal_action_ids_set = set(legal_action_id_list) # Doğrudan aksiyon ID listesini set'e çevir
+            # Vectorized masking - for-loop yerine numpy indexing kullan
+            legal_action_ids = np.array(legal_action_id_list, dtype=np.int32)
             
-            masked_policy = np.zeros_like(policy_probabilities)
-            sum_legal_probs = 0.0
+            # Mask oluştur - yasal aksiyonlar 1, diğerleri 0
+            mask = np.zeros_like(policy_probabilities)
+            mask[legal_action_ids] = 1.0
             
-            for action_id in legal_action_ids_set: # Set üzerinden iterasyon yap
-                if 0 <= action_id < len(policy_probabilities): # Aksiyon ID'sinin geçerli bir indeks olduğundan emin ol
-                    masked_policy[action_id] = policy_probabilities[action_id]
-                    sum_legal_probs += policy_probabilities[action_id]
+            # Masked policy
+            masked_policy = policy_probabilities * mask
+            sum_legal_probs = masked_policy.sum()
             
-            if sum_legal_probs > 1e-8: # Çok küçük olasılıkların toplamından kaynaklı hataları önle
+            if sum_legal_probs > 1e-8:
                 final_policy_for_expansion = masked_policy / sum_legal_probs
             else:
-                # Ağ tüm geçerli hamlelere ~0 olasılık atadıysa veya geçerli hamle yoksa (yukarıda handle edildi ama yine de)
-                # Eğer geçerli hamleler varsa onlara uniform olasılık ata
-                if legal_action_ids_set: # Set'in boş olup olmadığını kontrol et
-                    # print(f"Uyarı: MCTS genişletme sırasında ağ tüm geçerli hamlelere ~0 olasılık verdi. Geçerli hamleler arasında uniform dağılım kullanılıyor.") # Çok sık çıkabilir
-                    uniform_prob = 1.0 / len(legal_action_ids_set)
+                # Ağ tüm geçerli hamlelere ~0 olasılık atadıysa, uniform dağılım kullan
+                if len(legal_action_ids) > 0:
                     uniform_policy = np.zeros_like(policy_probabilities)
-                    for action_id in legal_action_ids_set: # Set üzerinden iterasyon yap
-                         if 0 <= action_id < len(uniform_policy):
-                            uniform_policy[action_id] = uniform_prob
+                    uniform_policy[legal_action_ids] = 1.0 / len(legal_action_ids)
                     final_policy_for_expansion = uniform_policy
-                else: # Geçerli hamle yoksa (örneğin oyun sonu), politika sıfır olacak, çocuk oluşmayacak
+                else:
                     final_policy_for_expansion = np.zeros_like(policy_probabilities)
 
     for action_id, prob in enumerate(final_policy_for_expansion):
