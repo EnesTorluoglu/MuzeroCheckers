@@ -139,9 +139,10 @@ class ReplayBuffer:
                 
                 # Anlık ödül (eğer k > 0 ise, yani s_1...s_K için r_k)
                 # s_0 için ödül hedefi yok (ya da bir önceki adımdan gelen)
-                if k < self.num_unroll_steps: # Sadece K adım için ödül var (r_1 ... r_K)
-                    segment_target_rewards.append(game.rewards[current_step_idx + 1]) # r_{t+1}
-                
+                if k < self.num_unroll_steps:  # Sadece K adım için ödül var (r_1 ... r_K)
+                    segment_target_rewards.append(game.rewards[current_step_idx])  # r_{t}
+                    'game.rewards[current_step_idx + 1] ilk hali boyleydi, ama +1 mantiksiz geldigi icin kaldirdim'
+
                 # Değer hedefi (n-step return)
                 # V(s_t) = r_{t+1} + g*r_{t+2} + ... + g^{n-1}*r_{t+n} + g^n * V_{target}(s_{t+n})
                 # V_{target}(s_{t+n}) oyun bitmişse 0, değilse ağdan gelen değer.
