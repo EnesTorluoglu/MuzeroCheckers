@@ -31,7 +31,7 @@ class GameTrace:
 
 class ReplayBuffer:
     def __init__(self, config):
-        self.window_size = config.get('replay_buffer_size', 10000)
+        self.window_size = config.get('replay_buffer_size', 2000)
         self.batch_size = config['batch_size']
         self.num_unroll_steps = config['num_unroll_steps']
         self.td_steps = config['td_steps']

@@ -12,7 +12,7 @@ CONFIG = {
     "td_steps": 10,             # Temporal Difference adımları (n-step return için)
     "learning_rate": 0.001,
     "batch_size": 32,
-    "replay_buffer_size": 10000,
+    "replay_buffer_size": 2000,
     "num_epochs": 100000,        # Toplam eğitim epoch sayısı
     "mcts_simulations": 80,    # MCTS simulasyon sayısı
     "mcts_c_puct": 1.25,       # MCTS UCB skorlaması için keşif sabiti
